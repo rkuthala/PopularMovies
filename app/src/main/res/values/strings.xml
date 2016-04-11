@@ -3,6 +3,7 @@
     <string name="action_settings">Settings</string>
     <string name="title_activity_detail">Details</string>
     <string name="title_activity_settings">Settings</string>
+    <string name="content_authority">com.ramesh.popularmovies</string>
 
     <string name="pref_sort_by_label">Sort By</string>
     <string name="pref_sort_by_key">sort_by</string>
@@ -10,4 +11,7 @@
     <string name="pref_sort_by_most_popular">sort_by_most_popular</string>
     <string name="pref_sort_by_rating_label">Highest Rating</string>
     <string name="pref_sort_by_rating">sort_by_rating</string>
+    <string name="pref_sort_by_favourites_label">Favourites</string>
+    <string name="pref_sort_by_favourites">sort_by_favourites</string>
+    <string name="action_share">Share</string>
 </resources>

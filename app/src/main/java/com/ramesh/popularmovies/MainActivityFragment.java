@@ -1,8 +1,8 @@
 package com.ramesh.popularmovies;
 
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -18,6 +18,7 @@ import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.Toast;
 
+import com.ramesh.popularmovies.data.MovieContract;
 import com.squareup.okhttp.OkHttpClient;
 import com.squareup.okhttp.Request;
 import com.squareup.okhttp.Response;
@@ -37,6 +38,13 @@ import java.util.List;
 public class MainActivityFragment extends Fragment {
     private static final String LOG_TAG = MainActivityFragment.class.getSimpleName();
     private MovieAdapter mMovieAdapter;
+    private GridView mMovieGridView;
+    private int mPosition = GridView.INVALID_POSITION;
+    private static final String POSITION_KEY = "selected_position";
+
+    public interface  Callback {
+        public void onItemSelected (Movie movie);
+    }
 
     public MainActivityFragment() {
 
@@ -49,12 +57,28 @@ public class MainActivityFragment extends Fragment {
         SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(getActivity());
         String sortBy = sp.getString(getString(R.string.pref_sort_by_key), getString(R.string.pref_sort_by_most_popular));
 
-        String moviesAPIUri = "https://api.themoviedb.org/3/movie/popular";
-        if(sortBy.equals(getString(R.string.pref_sort_by_rating))) {
-            moviesAPIUri = "https://api.themoviedb.org/3/movie/top_rated";
-        }
+        if(sortBy.equals(getString(R.string.pref_sort_by_favourites))) {
+            fetchFavouriteMovies();
+        } else {
 
-        new FetchMovieDB().execute(moviesAPIUri);
+            if(Utility.isNetworkAvailable(getActivity())) {
+                String moviesAPIUri = Utility.API_POPULAR_MOVIES_URL;
+                if(sortBy.equals(getString(R.string.pref_sort_by_rating))) {
+                    moviesAPIUri = Utility.API_TOP_RATED_MOVIES_URL;
+                }
+
+                new FetchMovieDB().execute(moviesAPIUri);
+            } else {
+                Toast.makeText(getActivity(), "Unable to connect to internet. Please try again later.", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        if(mPosition != GridView.INVALID_POSITION)
+            outState.putInt(POSITION_KEY, mPosition);
+        super.onSaveInstanceState(outState);
     }
 
     @Override
@@ -64,19 +88,66 @@ public class MainActivityFragment extends Fragment {
 
         mMovieAdapter = new MovieAdapter(getActivity());
 
-        GridView movieGridView = (GridView)rootView.findViewById(R.id.movie_grid_view);
-        movieGridView.setAdapter(mMovieAdapter);
+        mMovieGridView = (GridView)rootView.findViewById(R.id.movie_grid_view);
+        mMovieGridView.setAdapter(mMovieAdapter);
 
-        movieGridView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+        mMovieGridView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-                Intent detailActivity = new Intent(getActivity(), DetailActivity.class);
-                detailActivity.putExtra("movie", mMovieAdapter.getItem(position));
-                startActivity(detailActivity);
+                ((Callback) getActivity()).onItemSelected(mMovieAdapter.getItem(position));
+                mPosition = position;
             }
         });
 
+        if(savedInstanceState != null && savedInstanceState.containsKey(POSITION_KEY)) {
+            mPosition = savedInstanceState.getInt(POSITION_KEY);
+        }
+
         return rootView;
+    }
+
+    private void fetchFavouriteMovies() {
+
+        final String[] FAVOURITE_COLUMNS = {
+                MovieContract.FavouriteEntry._ID,
+                MovieContract.FavouriteEntry.COLUMN_MOVIE_TITLE,
+                MovieContract.FavouriteEntry.COLUMN_POSTER_PATH,
+                MovieContract.FavouriteEntry.COLUMN_OVERVIEW,
+                MovieContract.FavouriteEntry.COLUMN_RATING,
+                MovieContract.FavouriteEntry.COLUMN_RELEASE_DATE,
+                MovieContract.FavouriteEntry.COLUMN_DURATION
+        };
+        final int COL_ID = 0;
+        final int COL_MOVIE_TITLE = 1;
+        final int COL_POSTER_PATH = 2;
+        final int COL_OVERVIEW = 3;
+        final int COL_RATING = 4;
+        final int COL_RELEASE_YEAR = 5;
+        final int COL_DURATION = 6;
+
+        ArrayList<Movie> moviesList = new ArrayList<>();
+        try{
+            Cursor cur = getActivity().getContentResolver().query(MovieContract.FavouriteEntry.CONTENT_URI, FAVOURITE_COLUMNS, null, null, null);
+            if(cur != null && cur.moveToFirst()) {
+                do {
+                    long id = cur.getLong(COL_ID);
+                    String title = cur.getString(COL_MOVIE_TITLE);
+                    String releaseDate = cur.getString(COL_RELEASE_YEAR);
+                    String overview = cur.getString(COL_OVERVIEW);
+                    String posterUrl = cur.getString(COL_POSTER_PATH);
+                    double rating = cur.getDouble(COL_RATING);
+                    int duration = cur.getInt(COL_DURATION);
+                    moviesList.add(new Movie(id, title, posterUrl, overview, rating, releaseDate, duration));
+                } while (cur.moveToNext());
+                cur.close();
+            }
+            if(moviesList.size() == 0)
+                Toast.makeText(getActivity(), "There are no movies in your favourites list", Toast.LENGTH_SHORT).show();
+        } catch (Exception ex) {
+            Log.e(LOG_TAG, "Error in querying db, reason: " + ex.getMessage());
+            Toast.makeText(getActivity(), "Error in fetching favourites movies. Please try again later", Toast.LENGTH_SHORT).show();
+        }
+        mMovieAdapter.updateMoviesList(moviesList);
     }
 
     private class FetchMovieDB extends AsyncTask<String, Void, List<Movie>> {
@@ -89,13 +160,14 @@ public class MainActivityFragment extends Fragment {
                 JSONArray moviesArray = jsonObject.getJSONArray("results");
                 for (int index = 0 ; index < moviesArray.length(); index++) {
                     JSONObject movie = moviesArray.getJSONObject(index);
+                    long id = movie.getLong("id");
                     String title = movie.getString("original_title");
                     String releaseDate = movie.getString("release_date");
                     String overview = movie.getString("overview");
                     String posterUrl = imageBaseUrl + movie.getString("poster_path");
                     double rating = movie.getDouble("vote_average");
 
-                    moviesList.add(new Movie(title, posterUrl, overview, rating, releaseDate));
+                    moviesList.add(new Movie(id, title, posterUrl, overview, rating, releaseDate, -1)); // Duration will be fetched on detailed view
                 }
 
                 return moviesList;
@@ -110,9 +182,7 @@ public class MainActivityFragment extends Fragment {
                 JSONObject jsonObject = new JSONObject(jsonInput);
                 JSONObject imagesObject = jsonObject.getJSONObject("images");
                 String baseUrl = imagesObject.getString("base_url");
-                JSONArray posterSizeArray = imagesObject.getJSONArray("poster_sizes");
-                String size = posterSizeArray.getString(0);
-                return baseUrl + size;
+                return baseUrl + "w185";
             } catch (JSONException e) {
                 e.printStackTrace();
             }
@@ -121,7 +191,7 @@ public class MainActivityFragment extends Fragment {
 
         @Override
         protected List<Movie> doInBackground(String... params) {
-            Uri configAPIResource = Uri.parse("http://api.themoviedb.org/3/configuration").buildUpon()
+            Uri configAPIResource = Uri.parse(Utility.API_MOVIE_DB_CONFIG_URL).buildUpon()
                     .appendQueryParameter("api_key", BuildConfig.APP_KEY).build();
 
             Uri popularMoviesAPIResource = Uri.parse(params[0]).buildUpon()
@@ -155,7 +225,6 @@ public class MainActivityFragment extends Fragment {
             if(movies != null) {
                 mMovieAdapter.updateMoviesList(movies);
             } else {
-                Log.i(LOG_TAG, "There are no movies to show");
                 Toast.makeText(getActivity(), "No movies to show. Please try after some time", Toast.LENGTH_LONG).show();
             }
         }
@@ -174,6 +243,11 @@ public class MainActivityFragment extends Fragment {
         public void updateMoviesList(List<Movie> newMovieList) {
             movieList = newMovieList;
             notifyDataSetChanged();
+
+            if(mPosition != GridView.INVALID_POSITION) {
+                mMovieGridView.setSelection(mPosition);
+                mMovieGridView.smoothScrollToPosition(mPosition);
+            }
         }
 
         @Override
@@ -195,21 +269,27 @@ public class MainActivityFragment extends Fragment {
         public View getView(int position, View convertView, ViewGroup parent) {
             ImageView imageView;
 
+            View view;
             if (convertView == null) {
-                imageView = new ImageView(ctx);
-                imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                imageView.setPadding(8, 8, 8, 8);
+                view = LayoutInflater.from(ctx).inflate(R.layout.movie_item, parent, false);
+                imageView = (ImageView)view.findViewById(R.id.movie_poster);
+            } else {
+                view = convertView;
+                imageView = (ImageView) view.findViewById(R.id.movie_poster);
             }
-            else
-            {
-                imageView = (ImageView) convertView;
-            }
-            Picasso.with(getActivity())
+            Picasso.with(ctx)
                     .load(movieList.get(position).getImageUrl())
                     .placeholder(R.drawable.ic_launcher)
                     .into(imageView);
 
-            return imageView;
+            /*Glide.with(getActivity())
+                    .load(movieList.get(position).getImageUrl())
+//                    .centerCrop()
+                    .placeholder(R.drawable.ic_launcher)
+//                    .crossFade()
+                    .into(imageView);*/
+
+            return view;
         }
     }
 }
